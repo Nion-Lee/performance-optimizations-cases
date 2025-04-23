@@ -1,3 +1,3 @@
-![跑分截圖](https://github.com/user-attachments/assets/d467ac3d-03ef-471b-86c6-85a6413764cb)
+![跑分截圖2](https://github.com/user-attachments/assets/21e7778a-661c-4b2f-ac73-4a320c5eb6ba)
 
-新方法GC壓力降了86%、記憶體空間降86%、時間效能提升37%、抖動降低75%
+新方法：時間效能提升48.6%、GC壓力降了94.3%、記憶體空間降94.3%、、抖動降低81%
