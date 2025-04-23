@@ -8,15 +8,16 @@ namespace XscHeader跑分
     {
         private const string Platform = "3";
         private readonly ILogger<HeaderUtility> _logger;
-        private readonly Encoding Latin1 = Encoding.GetEncoding("ISO-8859-1");
+        private readonly MD5 _md5 = MD5.Create();
         private readonly char[] HexMap = "0123456789abcdef".ToCharArray();
+        private readonly Encoding Latin1 = Encoding.GetEncoding("ISO-8859-1");
         private long _timeDiffMilliseconds = -327;
 
         public string GetXscHeader(string url)
         {
             try
             {
-                // --- 1) 產生 32 位元時間亂數 Span<char> ---
+                // 1) 時間戳 + 隨機填充
                 long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + _timeDiffMilliseconds;
                 Span<char> timeHexSpan = stackalloc char[16];
                 nowMs.TryFormat(timeHexSpan, out int timeHexLen, "x");
@@ -24,36 +25,40 @@ namespace XscHeader跑分
                 for (int i = 0; i < 32; i++)
                     timeRandomSpan[i] = timeHexSpan[i % timeHexLen];
 
-                // --- 2) MD5(Hash) of Hostname+Platform+url into byte[] ---
+                // 2) 準備 Latin1 bytes of Hostname + Platform + URL
                 ReadOnlySpan<char> hostSpan = "imsb-9vkjm.utoyen.com".AsSpan();
                 ReadOnlySpan<char> urlSpan = url.AsSpan();
-                int byteCount = Latin1.GetByteCount(hostSpan) + 1 + Latin1.GetByteCount(urlSpan);
-                byte[] inputBuffer = new byte[byteCount];
+                int hostBytes = Latin1.GetByteCount(hostSpan);
+                int urlBytes = Latin1.GetByteCount(urlSpan);
+                Span<byte> inputBuffer = stackalloc byte[hostBytes + 1 + urlBytes];
                 int pos = 0;
-                Latin1.GetBytes(hostSpan, inputBuffer.AsSpan(pos));
-                pos += Latin1.GetByteCount(hostSpan);
+                Latin1.GetBytes(hostSpan, inputBuffer.Slice(pos, hostBytes));
+                pos += hostBytes;
                 inputBuffer[pos++] = (byte)Platform[0];
-                Latin1.GetBytes(urlSpan, inputBuffer.AsSpan(pos));
-                byte[] hash = MD5.HashData(inputBuffer);
+                Latin1.GetBytes(urlSpan, inputBuffer.Slice(pos, urlBytes));
 
-                // --- 3) 16 bytes → 32 hex chars in Span<char> ---
-                Span<char> hexSpan = stackalloc char[hash.Length * 2];
-                for (int i = 0; i < hash.Length; i++)
+                // 3) MD5 雜湊到 stackalloc 的緩衝區
+                Span<byte> hashBuffer = stackalloc byte[16];
+                _md5.TryComputeHash(inputBuffer, hashBuffer, out int hashLen);
+
+                // 4) 轉成 32 位 hex chars
+                Span<char> hexSpan = stackalloc char[hashBuffer.Length * 2];
+                for (int i = 0; i < hashBuffer.Length; i++)
                 {
-                    byte b = hash[i];
-                    hexSpan[i * 2] = HexMap[b >> 4];
-                    hexSpan[i * 2 + 1] = HexMap[b & 0xF];
+                    byte b = hashBuffer[i];
+                    hexSpan[2 * i] = HexMap[b >> 4];
+                    hexSpan[2 * i + 1] = HexMap[b & 0xF];
                 }
-                int hexLen = hash.Length * 2;
+                int hexLen = hashBuffer.Length * 2;
 
-                // --- 4) partOne: 0x02 前綴 + (hex XOR timeRandom) ---
-                int partOneLen = hexLen + 1;
+                // 5) partOne = 0x02 前綴 + (hex XOR timeRandom)
+                int partOneLen = 1 + hexLen;
                 Span<char> partOneSpan = stackalloc char[partOneLen];
                 partOneSpan[0] = (char)2;
                 for (int i = 0; i < hexLen; i++)
                     partOneSpan[i + 1] = (char)(hexSpan[i] ^ timeRandomSpan[i]);
 
-                // --- 5) partTwo & partThree from randomString Span ---
+                // 6) partTwo & partThree 從 randomSpan
                 int randomLen = 1 + timeHexLen;
                 Span<char> randomSpan = stackalloc char[randomLen];
                 randomSpan[0] = (char)128;
@@ -70,17 +75,19 @@ namespace XscHeader跑分
                     partThreeSpan[i] = (char)r;
                 }
 
-                // --- 6) 合併所有 span into one mergedSpan ---
+                // 7) 全部拼成 mergedSpan
                 int totalLen = partOneLen + pl * 2;
                 Span<char> mergedSpan = stackalloc char[totalLen];
                 partOneSpan.CopyTo(mergedSpan);
                 partTwoSpan.CopyTo(mergedSpan.Slice(partOneLen, pl));
                 partThreeSpan.CopyTo(mergedSpan.Slice(partOneLen + pl, pl));
 
-                // --- 7) Latin-1 編碼 & Base64 ---
+                // 8) Latin-1 編碼到位元組，最後 Base64
                 int outByteCount = Latin1.GetByteCount(mergedSpan);
-                byte[] outBytes = new byte[outByteCount];
+                Span<byte> outBytes = stackalloc byte[outByteCount];
                 Latin1.GetBytes(mergedSpan, outBytes);
+
+                // 利用 Convert 的 Span<byte> 版方法直接產生字串
                 return Convert.ToBase64String(outBytes);
             }
             catch (Exception ex)
